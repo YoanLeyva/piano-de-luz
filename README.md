@@ -40,7 +40,7 @@ No necesitas instalar dependencias ni configurar un entorno de desarrollo.
 1. Clona el repositorio:
 
    ```bash
-   git clone https://github.com/TU_USUARIO/piano-de-luz.git
+   git clone https://github.com/YoanLeyva/piano-de-luz.git
    ```
 
 2. Accede a la carpeta:
