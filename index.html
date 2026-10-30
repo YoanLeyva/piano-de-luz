@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#08060f" />
+<title>Piano de Luz · toca, desliza, escucha</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%; overflow: hidden; background: #08060f;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  canvas { position: fixed; inset: 0; display: block; }
+
+  /* ── HUD ── */
+  .hud {
+    position: fixed; top: max(20px, env(safe-area-inset-top)); left: 22px;
+    z-index: 10; pointer-events: none;
+    animation: fadeIn 1s cubic-bezier(.2,.8,.2,1) both;
+  }
+  .hud h1 {
+    font-size: clamp(20px, 3.6vw, 28px);
+    font-weight: 800;
+    letter-spacing: 0.3em;
+    background: linear-gradient(90deg, #6fe7ff, #b794ff, #ff8fd6, #ffd36f, #6fe7ff);
+    background-size: 400% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 8s linear infinite;
+  }
+  .hud p {
+    margin-top: 6px;
+    font-size: 10px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+  }
+
+  /* ── Botón mute ── */
+  .mute {
+    position: fixed;
+    top: max(20px, env(safe-area-inset-top)); right: 22px;
+    z-index: 20;
+    width: 44px; height: 44px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #fff; font-size: 18px;
+    display: grid; place-items: center;
+    cursor: pointer;
+    transition: all 0.25s ease;
+  }
+  .mute:active { transform: scale(0.92); }
+  .mute.muted { opacity: 0.45; }
+
+  /* ── Pista ── */
+  .hint {
+    position: fixed;
+    left: 50%; bottom: max(56px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 10;
+    pointer-events: none;
+    font-size: 11px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.6);
+    text-align: center;
+    animation: pulse 2.4s ease-in-out infinite;
+    transition: opacity 0.6s ease;
+    white-space: nowrap;
+  }
+  .hint.gone { opacity: 0; }
+
+  @keyframes shimmer { to { background-position: 400% 0; } }
+  @keyframes pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<header class="hud">
+  <h1>PIANO DE LUZ</h1>
+  <p>toca · desliza · escucha</p>
+</header>
+
+<button class="mute" id="mute" aria-label="silenciar">🔊</button>
+
+<div class="hint" id="hint">toca la pantalla para empezar ✦</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ══════════════════════════════════════════════════
+  //  CANVAS
+  // ══════════════════════════════════════════════════
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  let W = 0, H = 0, DPR = 1, keyW = 0;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    keyW = W / NOTES.length;
+    buildKeyGradients();
+  }
+
+  // ══════════════════════════════════════════════════
+  //  ESCALA — pentatónica mayor de Do (2 octavas)
+  //  Pentatónica: cualquier combinación suena bien.
+  // ══════════════════════════════════════════════════
+  const NOTES = [
+    { name: 'C4', freq: 261.63 },
+    { name: 'D4', freq: 293.66 },
+    { name: 'E4', freq: 329.63 },
+    { name: 'G4', freq: 392.00 },
+    { name: 'A4', freq: 440.00 },
+    { name: 'C5', freq: 523.25 },
+    { name: 'D5', freq: 587.33 },
+    { name: 'E5', freq: 659.25 },
+    { name: 'G5', freq: 783.99 },
+    { name: 'A5', freq: 880.00 },
+  ];
+
+  // Hue en arcoíris: 190° (cian) → 360°/0° (rojo)
+  NOTES.forEach((n, i) => {
+    n.hue = (190 + (i / (NOTES.length - 1)) * 170) % 360;
+  });
+
+  function zoneAt(x) {
+    const i = Math.floor(x / keyW);
+    return Math.max(0, Math.min(NOTES.length - 1, i));
+  }
+  function zoneCenter(i) { return i * keyW + keyW / 2; }
+
+  // Gradientes verticales por tecla (para el haz al pulsar)
+  let keyGradients = [];
+  function buildKeyGradients() {
+    keyGradients = NOTES.map(n => {
+      const grd = ctx.createLinearGradient(0, H, 0, 0);
+      grd.addColorStop(0,   `hsla(${n.hue}, 100%, 70%, 0.60)`);
+      grd.addColorStop(0.5, `hsla(${n.hue}, 100%, 62%, 0.18)`);
+      grd.addColorStop(1,   `hsla(${n.hue}, 100%, 55%, 0)`);
+      return grd;
+    });
+  }
+
+  // ══════════════════════════════════════════════════
+  //  AUDIO — todo sintetizado (sin archivos)
+  // ══════════════════════════════════════════════════
+  let audioCtx = null;
+  let masterGain = null;
+  let muted = false;
+
+  function initAudio() {
+    if (audioCtx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+
+    audioCtx = new AC();
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.32;
+
+    // Compresor para evitar saturación con muchos dedos
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = -16;
+    comp.knee.value = 22;
+    comp.ratio.value = 6;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+
+    // Eco suave (delay con feedback) para dar espacio
+    const delay = audioCtx.createDelay(1.0);
+    delay.delayTime.value = 0.23;
+
+    const feedback = audioCtx.createGain();
+    feedback.gain.value = 0.30;
+
+    const wet = audioCtx.createGain();
+    wet.gain.value = 0.28;
+
+    masterGain.connect(comp);          // seco
+    masterGain.connect(delay);         // a eco
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(wet);
+    wet.connect(comp);                 // húmedo
+    comp.connect(audioCtx.destination);
+  }
+
+  function playNote(index, velocity = 1) {
+    if (!audioCtx || muted) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const note = NOTES[index];
+    const t = audioCtx.currentTime;
+    const f = note.freq;
+    const dur = 1.5;
+
+    // Envolvente principal (ataque muy corto → pluck)
+    const env = audioCtx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(0.42 * velocity, t + 0.006);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+    // Filtro paso-bajo con caída (quita agudos con el tiempo)
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(6000, t);
+    filter.frequency.exponentialRampToValueAtTime(900, t + dur * 0.8);
+    filter.Q.value = 0.6;
+
+    // Armónicos (fundamental + 2x + 3x) → timbre tipo piano/campana
+    const harmonics = [
+      { mult: 1, type: 'sine',     amp: 1.00, decay: 1.00 },
+      { mult: 2, type: 'triangle', amp: 0.22, decay: 0.55 },
+      { mult: 3, type: 'sine',     amp: 0.08, decay: 0.30 },
+    ];
+
+    for (const h of harmonics) {
+      const osc = audioCtx.createOscillator();
+      osc.type = h.type;
+      osc.frequency.setValueAtTime(f * h.mult, t);
+      osc.detune.setValueAtTime((Math.random() - 0.5) * 6, t);
+
+      const hg = audioCtx.createGain();
+      hg.gain.setValueAtTime(0.0001, t);
+      hg.gain.exponentialRampToValueAtTime(h.amp * velocity, t + 0.006);
+      hg.gain.exponentialRampToValueAtTime(0.0001, t + dur * h.decay);
+
+      osc.connect(hg);
+      hg.connect(filter);
+      osc.start(t);
+      osc.stop(t + dur + 0.1);
+    }
+
+    filter.connect(env);
+    env.connect(masterGain);
+  }
+
+  // ══════════════════════════════════════════════════
+  //  VISUAL — glow cache, partículas, ondas, flashes
+  // ══════════════════════════════════════════════════
+  const particles = [];
+  const waves = [];
+  const labels = [];
+  const keyFlash = new Array(NOTES.length).fill(0);
+
+  const MAX_PARTICLES = 450;
+  const MAX_WAVES = 40;
+  const MAX_LABELS = 24;
+
+  // Sprites de brillo cacheados por hue (evita gradientes en el hot loop)
+  const glowCache = new Map();
+  function getGlow(hue) {
+    const key = ((Math.round(hue / 10) * 10) % 360 + 360) % 360;
+    let c = glowCache.get(key);
+    if (c) return c;
+
+    const S = 64;
+    c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(S/2, S/2, 0, S/2, S/2, S/2);
+    grd.addColorStop(0,    `hsla(${key}, 100%, 92%, 1)`);
+    grd.addColorStop(0.25, `hsla(${key}, 100%, 70%, 0.55)`);
+    grd.addColorStop(1,    `hsla(${key}, 100%, 55%, 0)`);
+    g.fillStyle = grd;
+    g.fillRect(0, 0, S, S);
+    glowCache.set(key, c);
+    return c;
+  }
+
+  function spawnBurst(x, y, hue, count, intensity = 1, upward = true) {
+    for (let i = 0; i < count; i++) {
+      if (particles.length >= MAX_PARTICLES) return;
+      const spread = upward ? Math.PI * 1.1 : Math.PI * 2;
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * spread;
+      const sp = (60 + Math.random() * 280) * intensity;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        r: 1.2 + Math.random() * 2.4,
+        life: 1,
+        decay: 0.9 + Math.random() * 0.9,
+        hue: hue + (Math.random() - 0.5) * 26,
+        gravity: 380 + Math.random() * 240,
+      });
+    }
+  }
+
+  function spawnWave(x, y, hue) {
+    if (waves.length >= MAX_WAVES) waves.shift();
+    waves.push({ x, y, hue, r: 8, life: 1, maxR: 180 + Math.random() * 120 });
+  }
+
+  function spawnLabel(x, y, note) {
+    if (labels.length >= MAX_LABELS) labels.shift();
+    labels.push({ x, y, text: note.name, hue: note.hue, life: 1, vy: -46 });
+  }
+
+  function trigger(zone, x, y, velocity = 1) {
+    playNote(zone, velocity);
+
+    const hue = NOTES[zone].hue;
+
+    // Chispas que "saltan" al ritmo de la nota
+    spawnBurst(x, y, hue, 16, 1.0, true);
+    spawnBurst(x, y, hue, 6, 0.5, false);
+    spawnBurst(zoneCenter(zone), H - 4, hue, 8, 0.7, true);
+
+    spawnWave(x, y, hue);
+    spawnLabel(x, y - 24, NOTES[zone]);
+
+    keyFlash[zone] = 1;
+  }
+
+  // ══════════════════════════════════════════════════
+  //  ESTRELLAS AMBIENTALES
+  // ══════════════════════════════════════════════════
+  const stars = [];
+  function initStars() {
+    stars.length = 0;
+    const n = Math.min(140, Math.round((W * H) / 9000));
+    for (let i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 0.3 + Math.random() * 1.4,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.2 + Math.random() * 0.9,
+        hue: Math.random() < 0.5 ? 220 : 280,
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  //  PUNTEROS — multi-touch + glissando
+  // ══════════════════════════════════════════════════
+  const pointers = new Map();
+
+  function dismissHint() {
+    const h = document.getElementById('hint');
+    if (h && !h.classList.contains('gone')) {
+      h.classList.add('gone');
+      setTimeout(() => h.remove(), 800);
+    }
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+
+    const z = zoneAt(e.clientX);
+    pointers.set(e.pointerId, { zone: z, x: e.clientX, y: e.clientY });
+    trigger(z, e.clientX, e.clientY, 1.0);
+    dismissHint();
+  }, { passive: false });
+
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+
+    p.x = e.clientX;
+    p.y = e.clientY;
+
+    const z = zoneAt(e.clientX);
+    if (z !== p.zone) {
+      p.zone = z;
+      trigger(z, e.clientX, e.clientY, 0.85); // glissando
+    }
+  });
+
+  function releasePointer(e) { pointers.delete(e.pointerId); }
+  canvas.addEventListener('pointerup', releasePointer);
+  canvas.addEventListener('pointercancel', releasePointer);
+  canvas.addEventListener('pointerleave', releasePointer);
+
+  window.addEventListener('blur', () => pointers.clear());
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ══════════════════════════════════════════════════
+  //  MUTE
+  // ══════════════════════════════════════════════════
+  const muteBtn = document.getElementById('mute');
+  muteBtn.addEventListener('click', () => {
+    muted = !muted;
+    muteBtn.textContent = muted ? '🔇' : '🔊';
+    muteBtn.classList.toggle('muted', muted);
+    if (!muted) {
+      initAudio();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+  });
+
+  // ══════════════════════════════════════════════════
+  //  UPDATE
+  // ══════════════════════════════════════════════════
+  let last = performance.now();
+  let time = 0;
+
+  function update(dt) {
+    time += dt;
+
+    // Partículas
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt * p.decay;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.vy += p.gravity * dt;
+      p.vx *= Math.pow(0.55, dt);
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+
+    // Ondas
+    for (let i = waves.length - 1; i >= 0; i--) {
+      const w = waves[i];
+      w.life -= dt * 1.5;
+      w.r += (w.maxR - w.r) * dt * 4.5;
+      if (w.life <= 0) waves.splice(i, 1);
+    }
+
+    // Etiquetas de nota
+    for (let i = labels.length - 1; i >= 0; i--) {
+      const l = labels[i];
+      l.life -= dt * 1.2;
+      l.y += l.vy * dt;
+      l.vy *= Math.pow(0.6, dt);
+      if (l.life <= 0) labels.splice(i, 1);
+    }
+
+    // Flashes de teclas
+    for (let i = 0; i < keyFlash.length; i++) {
+      if (keyFlash[i] > 0) keyFlash[i] = Math.max(0, keyFlash[i] - dt * 2.6);
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  //  RENDER
+  // ══════════════════════════════════════════════════
+  function render() {
+    // Estela
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(8, 6, 15, 0.32)';
+    ctx.fillRect(0, 0, W, H);
+
+    // ── Estrellas ──
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of stars) {
+      const tw = 0.5 + 0.5 * Math.sin(time * s.speed + s.phase);
+      ctx.fillStyle = `hsla(${s.hue}, 100%, 82%, ${tw * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ── Haces verticales de teclas pulsadas ──
+    for (let i = 0; i < keyFlash.length; i++) {
+      const f = keyFlash[i];
+      if (f <= 0.01) continue;
+
+      ctx.globalAlpha = f;
+      ctx.fillStyle = keyGradients[i];
+      ctx.fillRect(i * keyW, 0, keyW, H);
+      ctx.globalAlpha = 1;
+
+      // Línea inferior brillante = tecla "pulsada"
+      ctx.fillStyle = `hsla(${NOTES[i].hue}, 100%, 80%, ${f * 0.95})`;
+      ctx.fillRect(i * keyW + 1, H - 8, keyW - 2, 8);
+    }
+
+    // ── Ondas expansivas ──
+    for (const w of waves) {
+      ctx.strokeStyle = `hsla(${w.hue}, 100%, 68%, ${w.life * 0.65})`;
+      ctx.lineWidth = 1.5 + w.life * 2.5;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // ── Partículas ──
+    for (const p of particles) {
+      const size = p.r * 7 * (0.4 + p.life * 0.6);
+      ctx.globalAlpha = Math.min(1, p.life * 1.3);
+      ctx.drawImage(getGlow(p.hue), p.x - size / 2, p.y - size / 2, size, size);
+    }
+    ctx.globalAlpha = 1;
+
+    // ── Etiquetas de nota ──
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 14px ui-sans-serif, system-ui, sans-serif';
+    for (const l of labels) {
+      ctx.globalAlpha = Math.min(1, l.life * 1.4);
+      ctx.fillStyle = `hsla(${l.hue}, 100%, 85%, 1)`;
+      ctx.fillText(l.text, l.x, l.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // ── Puntos guía en la base ──
+    ctx.globalCompositeOperation = 'source-over';
+    for (let i = 0; i < NOTES.length; i++) {
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.beginPath();
+      ctx.arc(zoneCenter(i), H - 26, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ── Viñeta ──
+    const vg = ctx.createRadialGradient(
+      W / 2, H / 2, Math.min(W, H) * 0.35,
+      W / 2, H / 2, Math.max(W, H) * 0.78
+    );
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ══════════════════════════════════════════════════
+  //  LOOP
+  // ══════════════════════════════════════════════════
+  function loop(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ══════════════════════════════════════════════════
+  //  INIT
+  // ══════════════════════════════════════════════════
+  window.addEventListener('resize', () => {
+    resize();
+    initStars();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    last = performance.now();
+  });
+
+  resize();
+  initStars();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
