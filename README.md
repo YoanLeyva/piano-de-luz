@@ -80,7 +80,7 @@ piano-de-luz/
 │
 ├── index.html      # Aplicación completa
 ├── README.md       # Documentación del proyecto
-└── LICENSE         # Licencia del proyecto
+
 ```
 
 ## 🌌 Objetivo del proyecto
