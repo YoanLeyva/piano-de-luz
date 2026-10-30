@@ -8,7 +8,7 @@ Desarrollado con HTML5, CSS3 y JavaScript puro, sin frameworks ni dependencias e
 
 ## 🎹 Demo
 
-Próximamente disponible mediante GitHub Pages.
+🚀 **[Probar Piano de Luz](https://YoanLeyva.github.io/piano-de-luz/)**
 
 ## ✨ Características
 
@@ -40,7 +40,7 @@ No necesitas instalar dependencias ni configurar un entorno de desarrollo.
 1. Clona el repositorio:
 
    ```bash
-   git clone https://github.com/YoanLeyva/piano-de-luz.git
+   git clone https://github.com/TU_USUARIO/piano-de-luz.git
    ```
 
 2. Accede a la carpeta:
@@ -80,7 +80,7 @@ piano-de-luz/
 │
 ├── index.html      # Aplicación completa
 ├── README.md       # Documentación del proyecto
-
+└── LICENSE         # Licencia del proyecto
 ```
 
 ## 🌌 Objetivo del proyecto
@@ -94,3 +94,7 @@ Explorar las posibilidades creativas de las tecnologías web nativas, combinando
 Ingeniero informático y desarrollador de software.
 
 - GitHub: [@YoanLeyva](https://github.com/YoanLeyva)
+
+## 📄 Licencia
+
+Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo `LICENSE` para conocer sus condiciones de uso, modificación y distribución.
